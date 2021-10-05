@@ -1,5 +1,7 @@
-summary.phmc_mpl=function(obj,se="M2HM2",full=FALSE){
-  col.names = c("Estimate", "Std. Error", "z-value", "Pr(>|z|)")
+summary.phmc_mpl=function(obj,se="M2HM2",full=FALSE, ORHR = TRUE){
+  col.names = c("Estimate","Std. Error", "z-value", "Pr(>|z|)")
+  col.names.OR = c("Odds Ratio","Lower CI", "Upper CI", "Pr(>|z|)")
+  col.names.HR = c("Hazard Ratio","Lower CI", "Upper CI", "Pr(>|z|)")
   p=obj$dimensions$p
   q=obj$dimensions$q
   m=obj$dimensions$m
@@ -7,12 +9,21 @@ summary.phmc_mpl=function(obj,se="M2HM2",full=FALSE){
     seB=obj$se$se_H[1:p]
     seG=obj$se$se_H[(p+1):(p+q)]
     seT=obj$se$se_H[(p+q+1):(p+q+m)]
+    
     matxB = cbind(obj$beta,seB,obj$beta/seB,2*(1-pnorm(abs(obj$beta/seB))))
     colnames(matxB)=col.names
     rownames(matxB)=colnames(obj$data$Z)
+    matOR = cbind(exp(obj$beta), exp(obj$beta - 1.96*seB),exp(obj$beta + 1.96*seB), 2*(1-pnorm(abs(obj$beta/seB))))
+    colnames(matOR)=col.names.OR
+    rownames(matOR)=colnames(obj$data$Z)
+    
     matxG = cbind(obj$gamma,seG,obj$gamma/seG,2*(1-pnorm(abs(obj$gamma/seG))))
     colnames(matxG)=col.names
     rownames(matxG)=colnames(obj$data$X)
+    matHR = cbind(exp(obj$gamma), exp(obj$gamma - 1.96*seG),exp(obj$gamma + 1.96*seG), 2*(1-pnorm(abs(obj$gamma/seG))))
+    colnames(matHR)=col.names.HR
+    rownames(matHR)=colnames(obj$data$X)
+    
     matxT = cbind(obj$theta,seT,obj$theta/seT,2*(1-pnorm(abs(obj$theta/seT))))
     colnames(matxT)=col.names
   }
@@ -23,14 +34,22 @@ summary.phmc_mpl=function(obj,se="M2HM2",full=FALSE){
     matxB = cbind(obj$beta,seB,obj$beta/seB,2*(1-pnorm(abs(obj$beta/seB))))
     colnames(matxB)=col.names
     rownames(matxB)=colnames(obj$data$Z)
+    matOR = cbind(exp(obj$beta), exp(obj$beta - 1.96*seB),exp(obj$beta + 1.96*seB), 2*(1-pnorm(abs(obj$beta/seB))))
+    colnames(matOR)=col.names.OR
+    rownames(matOR)=colnames(obj$data$Z)
+    
     matxG = cbind(obj$gamma,seG,obj$gamma/seG,2*(1-pnorm(abs(obj$gamma/seG))))
     colnames(matxG)=col.names
     rownames(matxG)=colnames(obj$data$X)
+    matHR = cbind(exp(obj$gamma), exp(obj$gamma - 1.96*seG),exp(obj$gamma + 1.96*seG), 2*(1-pnorm(abs(obj$gamma/seG))))
+    colnames(matHR)=col.names.HR
+    rownames(matHR)=colnames(obj$data$X)
+    
     matxT = cbind(obj$theta,seT,obj$theta/seT,2*(1-pnorm(abs(obj$theta/seT))))
     colnames(matxT)=col.names
   }
   
-  out=list(Beta=matxB,Gamma=matxG,Theta=matxT,inf=list(call=obj$call,full=full,data=obj$data,ploglik=obj$ploglik,convergence=obj$convergence,smooth=obj$smooth,active=obj$constraint_info))
+  out=list(Beta=matxB,Gamma=matxG,Theta=matxT, OR=matOR, HR=matHR, ORHR = ORHR, inf=list(call=obj$call,full=full,data=obj$data,ploglik=obj$ploglik,convergence=obj$convergence,smooth=obj$smooth,active=obj$constraint_info))
   class(out) = "summary.phmc_mpl"
   out
 
@@ -76,11 +95,22 @@ print.summary.phmc_mpl=function(x,...){
   
   cat("\n-----\n")
   
-  cat("Logistic regression parameters : \n",sep="")
-  printCoefmat(x$Beta, P.values=TRUE, has.Pvalue=TRUE)
+  if(x$ORHR == TRUE){
+    cat("\nIncidence odds ratios : \n",sep="")
+    printCoefmat(x$OR, P.values=TRUE, has.Pvalue=TRUE)
+    
+    cat("\nLatency hazard ratios : \n",sep="")
+    printCoefmat(x$HR, P.values=TRUE, has.Pvalue=TRUE) 
+    
+  }else{
+    cat("Logistic regression parameters : \n",sep="")
+    printCoefmat(x$Beta, P.values=TRUE, has.Pvalue=TRUE)
+    
+    cat("\nProportional hazards regression parameters : \n",sep="")
+    printCoefmat(x$Gamma, P.values=TRUE, has.Pvalue=TRUE) 
+    
+  }
   
-  cat("\nProportional hazards regression parameters : \n",sep="")
-  printCoefmat(x$Gamma, P.values=TRUE, has.Pvalue=TRUE) 
   
   cat("\n-----\n")
   
@@ -184,11 +214,11 @@ predict.phmc_mpl = function(object,se="M2QM2",type="hazard",cov=NULL,i=NULL,time
   }
   
   if(is.null(i)&is.null(cov)){
-    xT=apply(object$data$X,2,mean)
+    xT=object$data$X
   }else if(!is.null(i) & is.null(cov)){
     xT=object$data$X[i[1],]
   }else{
-    xT=matrix(cov,nrow=1,ncol=3)
+    xT=matrix(cov,nrow=1)
   }
   
   
@@ -221,4 +251,103 @@ predict.phmc_mpl = function(object,se="M2QM2",type="hazard",cov=NULL,i=NULL,time
   class(out)=c("predict.phmc_mpl","data.frame")
   out
 }
+
+
+phmc_piecewiseCI = function(obj, z_pos, x_pos, lvls = c(0,1), CI = TRUE){
+  X_temp_save = NULL
+  
+  if(is.null(x_pos)){
+    cov_obj = apply(obj$data$X,2,mean)
+    predict_obj = predict(obj, type = "survival", cov = cov_obj)
+    time = predict_obj$time
+    s = rep(predict_obj$survival,length(lvls))
+    s = matrix(s, nrow = 1000, ncol = length(lvls), byrow = FALSE)
+    X_temp_save = matrix(rep(cov_obj,length(lvls)), nrow = length(lvls), byrow = TRUE)
+  }else{
+    s = matrix(0,nrow = 1000, ncol = length(lvls))
+    for(l in 1:length(lvls)){
+      cov_obj = apply(obj$data$X,2,mean)
+      cov_obj[x_pos] = lvls[l]
+      predict_obj = predict(obj, type = "survival", cov = cov_obj)
+      time = predict_obj$time
+      s[,l] = predict_obj$survival
+      X_temp_save = rbind(X_temp_save, cov_obj)
+      
+    }
+  }
+  pop.survival = s
+  Z_temp_save = NULL
+  if(is.null(z_pos)){
+    Z_tmp = matrix(apply(obj$data$Z,2,mean),nrow=1)
+    ZB = Z_tmp%*%obj$beta
+    pi = as.numeric(exp(ZB)/(1+exp(ZB)))
+    pi_save = rep(pi, length(lvls))
+    pop.survival = pi*s + (1 - pi)
+    Z_temp_save = matrix(rep(Z_tmp,length(lvls)), nrow = length(lvls), byrow = TRUE)
+    
+  }else{
+    pi_save = NULL
+    for(l in 1:length(lvls)){
+      Z_tmp = matrix(apply(obj$data$Z,2,mean),nrow=1)
+      Z_tmp[z_pos] = lvls[l]
+      ZB = Z_tmp%*%obj$beta
+      pi = as.numeric(exp(ZB)/(1+exp(ZB)))
+      pi_save = c(pi_save, pi)
+      pop.survival[,l] = pi*s[,l] + (1 - pi)
+      Z_temp_save = rbind(Z_temp_save, Z_tmp)
+    }
+    
+  }
+  
+  CI_save = matrix(0, nrow = 1000, ncol = length(lvls)*2)
+  
+  for(l in 1:length(lvls)){
+    X_temp = X_temp_save[l,]
+    Z_temp = Z_temp_save[l,]
+    pi = pi_save[l]
+    mu_X=exp(X_temp%*%obj$gamma)
+    cov_eta=obj$covar$M2QM2
+    
+    UL_population.survival.logit=rep(0,length(time))
+    LL_population.survival.logit=rep(0,length(time))
+    
+    for(p in 2:length(time)){
+      t=time[p]
+      St=s[p,l]
+      logitSpop=log(pop.survival[p,l]/(1-pop.survival[p,l]))
+      Psi_t=basis_phmc(t,knots=obj$knots,order=obj$control$order,which=2)
+      
+      dlogitSt_dbeta=solve(pop.survival[p,l]*(1-pop.survival[p,l]))%*%(St-1)%*%pi%*%(1-pi)%*%Z_temp
+      
+      dlogitSt_dgamma=-solve(pop.survival[p,l]*(1-pop.survival[p,l]))%*%(pi%*%St%*%(-log(St)))%*%X_temp
+      
+      dlogitSt_dtheta=-mu_X%*%pi%*%St%*%solve(pop.survival[p,l]*(1-pop.survival[p,l]))%*%Psi_t
+      
+      dlogitSt_deta=matrix(c(dlogitSt_dbeta,dlogitSt_dgamma,dlogitSt_dtheta),nrow=1)
+      
+      var_logitSt=dlogitSt_deta%*%cov_eta%*%t(dlogitSt_deta)
+      se_logitSt=sqrt(var_logitSt)
+      
+      
+      
+      LL_population.survival.logit[p]=logitSpop-1.96*se_logitSt
+      UL_population.survival.logit[p]=logitSpop+1.96*se_logitSt
+      
+    }
+    
+    LL=exp(LL_population.survival.logit)/(1+exp(LL_population.survival.logit))
+    UL=exp(UL_population.survival.logit)/(1+exp(UL_population.survival.logit))
+    
+    CI_save[,l]=LL
+    CI_save[,(l+2)]=UL
+    
+  }
+  
+  
+  out = list(pop.survival = pop.survival, CI_save = CI_save, time = time)
+  return(out)
+  
+}
+
+
 
